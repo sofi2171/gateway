@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
+const admin = require('firebase-admin');
 
 if (!process.env.STRIPE_SECRET_KEY) {
   console.error('❌ ERROR: STRIPE_SECRET_KEY not found in .env file!');
@@ -12,27 +13,68 @@ if (!process.env.STRIPE_SECRET_KEY) {
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 
+// Initialize Firebase Admin
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log('✅ Firebase Admin initialized');
+} else {
+  console.warn('⚠️ Firebase Admin not initialized - credits won\'t be added');
+}
+
+const db = admin.firestore();
+
 app.use(express.json());
 app.use(cors({
   origin: [
     'http://localhost:5500', 
     'http://127.0.0.1:5500', 
     'https://healthxray.online', 
-    'https://www.healthxray.online', 
-    'https://gateway-y53s.onrender.com',
-    'https://stately-semolina-0d9ce7.netlify.app'
+    'https://www.healthxray.online'
   ],
   credentials: true
 }));
 
 const PACKAGES = {
-  silver: { price: 1999, name: 'Silver Package' },
-  security: { price: 2499, name: 'Security Package' },
-  gold: { price: 2999, name: 'Gold Package' },
-  boost: { price: 3499, name: 'Boost Package' },
-  platinum: { price: 4999, name: 'Platinum Package' },
-  vip: { price: 5999, name: 'VIP Package' }
+  silver: { price: 1999, name: 'Silver Package', credits: 100 },
+  security: { price: 2499, name: 'Security Package', credits: 150 },
+  gold: { price: 2999, name: 'Gold Package', credits: 200 },
+  boost: { price: 3499, name: 'Boost Package', credits: 250 },
+  platinum: { price: 4999, name: 'Platinum Package', credits: 500 },
+  vip: { price: 5999, name: 'VIP Package', credits: 1000 }
 };
+
+// Add credits to user
+async function addCreditsToUser(email, credits, packageName) {
+  try {
+    // Find user by email
+    const usersRef = db.collection('users');
+    const snapshot = await usersRef.where('email', '==', email).limit(1).get();
+    
+    if (snapshot.empty) {
+      console.error('❌ User not found:', email);
+      return false;
+    }
+
+    const userDoc = snapshot.docs[0];
+    const currentCredits = userDoc.data().credits || 0;
+    const newCredits = currentCredits + credits;
+
+    await userDoc.ref.update({
+      credits: newCredits,
+      lastPurchase: admin.firestore.FieldValue.serverTimestamp(),
+      lastPackage: packageName
+    });
+
+    console.log(`✅ Added ${credits} credits to ${email}. New balance: ${newCredits}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error adding credits:', error);
+    return false;
+  }
+}
 
 // Brevo Email Function
 function sendEmail(to, subject, htmlContent) {
@@ -231,11 +273,17 @@ app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) =
       console.log('Customer email:', session.customer_email);
       console.log('Package:', session.metadata.package);
       
-      // Send purchase confirmation email
+      // Send purchase confirmation email & add credits
       if (session.customer_email && session.metadata.package) {
         const pkg = PACKAGES[session.metadata.package];
+        
+        // Send email
         sendPurchaseEmail(session.customer_email, pkg.name, pkg.price)
           .catch(err => console.error('Email error:', err));
+        
+        // Add credits
+        addCreditsToUser(session.customer_email, pkg.credits, pkg.name)
+          .catch(err => console.error('Credits error:', err));
       }
       break;
 
@@ -310,6 +358,17 @@ app.get('/', (req, res) => {
 app.options('*', cors());
 
 const PORT = process.env.PORT || 3000;
+
+// Keep-alive ping to prevent sleeping
+if (process.env.NODE_ENV === 'production') {
+  setInterval(() => {
+    https.get(`https://gateway-y53s.onrender.com/`, (res) => {
+      console.log('✅ Keep-alive ping:', res.statusCode);
+    }).on('error', (err) => {
+      console.error('❌ Keep-alive error:', err.message);
+    });
+  }, 14 * 60 * 1000); // Ping every 14 minutes
+}
 
 app.listen(PORT, () => {
   console.log('\n✅ Backend server is running!');
