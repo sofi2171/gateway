@@ -13,7 +13,14 @@ const app = express();
 
 app.use(express.json());
 app.use(cors({
-  origin: ['http://localhost:5500', 'http://127.0.0.1:5500', 'https://healthxray.online', 'https://www.healthxray.online'],
+  origin: [
+    'http://localhost:5500', 
+    'http://127.0.0.1:5500', 
+    'https://healthxray.online', 
+    'https://www.healthxray.online', 
+    'https://gateway-y53s.onrender.com',
+    'https://stately-semolina-0d9ce7.netlify.app'
+  ],
   credentials: true
 }));
 
@@ -57,6 +64,7 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
+// Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
     status: 'running', 
@@ -64,6 +72,9 @@ app.get('/', (req, res) => {
     endpoints: ['/create-checkout-session']
   });
 });
+
+// Handle preflight requests
+app.options('*', cors());
 
 const PORT = process.env.PORT || 3000;
 
